@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 from transformers.file_utils import ModelOutput
 from huggingface_hub import snapshot_download
-from minLSTMNet import MinLSTM
+from minGRU_pytorch import minGRU
 
 
 
@@ -85,7 +85,7 @@ class BGEM3Model(nn.Module):
                                               out_features=self.model.config.hidden_size if colbert_dim == -1 else colbert_dim)
         self.sparse_linear = torch.nn.Linear(in_features=self.model.config.hidden_size, out_features=1)
 
-        self.query_LSTM = MinLSTM(input_size= self.model.config.hidden_size, hidden_size=self.model.config.hidden_size)
+        self.query_minGRU = minGRU(self.model.config.hidden_size)
 
         if os.path.exists(os.path.join(model_name, 'colbert_linear.pt')) and os.path.exists(
                 os.path.join(model_name, 'sparse_linear.pt')):
@@ -147,7 +147,7 @@ class BGEM3Model(nn.Module):
         dense_vecs, sparse_vecs, colbert_vecs = None, None, None
         last_hidden_state = self.model(**features, return_dict=True).last_hidden_state
         if is_query:
-           self.query_LSTM(last_hidden_state)
+           last_hidden_state = self.query_minGRU(last_hidden_state)
         
         dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
         if self.unified_finetuning:
