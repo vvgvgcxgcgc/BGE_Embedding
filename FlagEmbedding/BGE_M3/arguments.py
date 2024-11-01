@@ -98,3 +98,5 @@ class RetrieverTrainingArguments(TrainingArguments):
     fix_encoder: bool = field(default=False, metadata={"help": "Freeze the parameters of encoder"})
     colbert_dim: int = field(default=-1, metadata={"help": "Dim of colbert linear"})
     self_distill_start_step: int = field(default=-1, metadata={"help": "Num of step when using self-distill"})
+    save_steps: Optional[int] = field(default=1000, metadata={"help": "Number of updates steps before saving checkpoint"})
+    save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limit the total number of checkpoints"})

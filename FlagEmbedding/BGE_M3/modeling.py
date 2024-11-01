@@ -10,6 +10,9 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 from transformers.file_utils import ModelOutput
 from huggingface_hub import snapshot_download
+from minLSTMNet import MinLSTM
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +77,15 @@ class BGEM3Model(nn.Module):
                                            ignore_patterns=['flax_model.msgpack', 'rust_model.ot', 'tf_model.h5'])
 
         self.model = AutoModel.from_pretrained(model_name)
+        
+        
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         self.colbert_linear = torch.nn.Linear(in_features=self.model.config.hidden_size,
                                               out_features=self.model.config.hidden_size if colbert_dim == -1 else colbert_dim)
         self.sparse_linear = torch.nn.Linear(in_features=self.model.config.hidden_size, out_features=1)
+
+        self.query_LSTM = MinLSTM(input_size= self.model.config.hidden_size, hidden_size=self.model.config.hidden_size)
 
         if os.path.exists(os.path.join(model_name, 'colbert_linear.pt')) and os.path.exists(
                 os.path.join(model_name, 'sparse_linear.pt')):
@@ -93,7 +100,7 @@ class BGEM3Model(nn.Module):
 
     def dense_embedding(self, hidden_state, mask):
         if self.sentence_pooling_method == 'cls':
-            return hidden_state[:, 0]
+            return hidden_state[:, -1]
         elif self.sentence_pooling_method == 'mean':
             s = torch.sum(hidden_state * mask.unsqueeze(-1).float(), dim=1)
             d = mask.sum(axis=1, keepdim=True).float()
@@ -136,9 +143,12 @@ class BGEM3Model(nn.Module):
         scores = scores / self.temperature
         return scores
 
-    def _encode(self, features):
+    def _encode(self, features, is_query = 0):
         dense_vecs, sparse_vecs, colbert_vecs = None, None, None
         last_hidden_state = self.model(**features, return_dict=True).last_hidden_state
+        if is_query:
+           self.query_LSTM(last_hidden_state)
+        
         dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
         if self.unified_finetuning:
             sparse_vecs = self.sparse_embedding(last_hidden_state, features['input_ids'])
@@ -149,7 +159,7 @@ class BGEM3Model(nn.Module):
                 colbert_vecs = torch.nn.functional.normalize(colbert_vecs, dim=-1)
         return dense_vecs, sparse_vecs, colbert_vecs
 
-    def encode(self, features, sub_batch_size=None):
+    def encode(self, features, sub_batch_size=None, is_query = 0):
         if features is None:
             return None
 
@@ -161,7 +171,7 @@ class BGEM3Model(nn.Module):
                 for k, v in features.items():
                     sub_features[k] = v[i:end_inx]
 
-                dense_vecs, sparse_vecs, colbert_vecs = self._encode(sub_features)
+                dense_vecs, sparse_vecs, colbert_vecs = self._encode(sub_features, is_query)
                 all_dense_vecs.append(dense_vecs)
                 all_sparse_vecs.append(sparse_vecs)
                 all_colbert_vecs.append(colbert_vecs)
@@ -171,7 +181,7 @@ class BGEM3Model(nn.Module):
                 sparse_vecs = torch.cat(all_sparse_vecs, 0)
                 colbert_vecs = torch.cat(all_colbert_vecs, 0)
         else:
-            dense_vecs, sparse_vecs, colbert_vecs = self._encode(features)
+            dense_vecs, sparse_vecs, colbert_vecs = self._encode(features,is_query )
 
         if self.unified_finetuning:
             return dense_vecs.contiguous(), sparse_vecs.contiguous(), colbert_vecs.contiguous()
@@ -209,12 +219,12 @@ class BGEM3Model(nn.Module):
                 bi_directions=None):
         if self.enable_sub_batch:
             q_dense_vecs, q_sparse_vecs, q_colbert_vecs = self.encode(query,
-                                                                      sub_batch_size=self.compute_sub_batch_size(query))
+                                                                      sub_batch_size=self.compute_sub_batch_size(query), is_query = 1)
             p_dense_vecs, p_sparse_vecs, p_colbert_vecs = self.encode(passage,
                                                                       sub_batch_size=self.compute_sub_batch_size(
                                                                           passage))
         else:
-            q_dense_vecs, q_sparse_vecs, q_colbert_vecs = self.encode(query)
+            q_dense_vecs, q_sparse_vecs, q_colbert_vecs = self.encode(query, is_query = 1)
             p_dense_vecs, p_sparse_vecs, p_colbert_vecs = self.encode(passage)
 
         if self.training:
