@@ -98,9 +98,13 @@ class BGEM3Model(nn.Module):
     def gradient_checkpointing_enable(self, **kwargs):
         self.model.gradient_checkpointing_enable(**kwargs)
 
-    def dense_embedding(self, hidden_state, mask):
+    def dense_embedding(self, hidden_state, mask, is_query = 0):
         if self.sentence_pooling_method == 'cls':
-            return hidden_state[:, -1]
+            if is_query:
+                return hidden_state[:, -1]
+            else:
+                return hidden_state[:, 0]
+
         elif self.sentence_pooling_method == 'mean':
             s = torch.sum(hidden_state * mask.unsqueeze(-1).float(), dim=1)
             d = mask.sum(axis=1, keepdim=True).float()
@@ -149,7 +153,7 @@ class BGEM3Model(nn.Module):
         if is_query:
            last_hidden_state = self.query_minGRU(last_hidden_state)
         
-        dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
+        dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'],is_query )
         if self.unified_finetuning:
             sparse_vecs = self.sparse_embedding(last_hidden_state, features['input_ids'])
             colbert_vecs = self.colbert_embedding(last_hidden_state, features['attention_mask'])
@@ -355,14 +359,18 @@ class BGEM3ForInference(BGEM3Model):
                 return_dense: bool = True,
                 return_sparse: bool = False,
                 return_colbert: bool = False,
-                return_sparse_embedding: bool = False):
+                return_sparse_embedding: bool = False,
+                is_query: int = 0):
         assert return_dense or return_sparse or return_colbert, 'Must choose one or more from `return_colbert`, `return_sparse`, `return_dense` to set `True`!'
 
         last_hidden_state = self.model(**text_input, return_dict=True).last_hidden_state
 
+        if is_query :
+            last_hidden_state = self.query_minGRU(last_hidden_state)
+
         output = {}
         if return_dense:
-            dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+            dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'], is_query)
             output['dense_vecs'] = dense_vecs
         if return_sparse:
             sparse_vecs = self.sparse_embedding(last_hidden_state, text_input['input_ids'],
