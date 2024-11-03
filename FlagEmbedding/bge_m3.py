@@ -102,8 +102,7 @@ class BGEM3FlagModel:
                max_length: int = 8192,
                return_dense: bool = True,
                return_sparse: bool = False,
-               return_colbert_vecs: bool = False,
-               is_query: int = 1) -> Dict:
+               return_colbert_vecs: bool = False) -> Dict:
 
         if self.num_gpus > 1:
             batch_size *= self.num_gpus
@@ -148,8 +147,7 @@ class BGEM3FlagModel:
             output = self.model(batch_data,
                                 return_dense=return_dense,
                                 return_sparse=return_sparse,
-                                return_colbert=return_colbert_vecs,
-                                is_query = is_query)
+                                return_colbert=return_colbert_vecs)
             if return_dense:
                 all_dense_embeddings.append(output['dense_vecs'].cpu().numpy())
 
@@ -233,7 +231,7 @@ class BGEM3FlagModel:
             corpus_inputs = _tokenize(corpus_batch, max_length=max_passage_length).to(self.device)
 
             queries_output = self.model(queries_inputs, return_dense=True, return_sparse=True, return_colbert=True,
-                                        return_sparse_embedding=True, is_query = 1)
+                                        return_sparse_embedding=True)
             corpus_output = self.model(corpus_inputs, return_dense=True, return_sparse=True, return_colbert=True,
                                        return_sparse_embedding=True)
 

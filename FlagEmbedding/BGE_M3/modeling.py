@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 from transformers.file_utils import ModelOutput
 from huggingface_hub import snapshot_download
-from minGRU_pytorch import minGRU
+# from minGRU_pytorch import minGRU
 
 
 
@@ -85,11 +85,10 @@ class BGEM3Model(nn.Module):
                                               out_features=self.model.config.hidden_size if colbert_dim == -1 else colbert_dim)
         self.sparse_linear = torch.nn.Linear(in_features=self.model.config.hidden_size, out_features=1)
 
-        self.query_minGRU = minGRU(self.model.config.hidden_size)
+        # self.query_minGRU = minGRU(self.model.config.hidden_size)
 
         if os.path.exists(os.path.join(model_name, 'colbert_linear.pt')) and os.path.exists(
-                os.path.join(model_name, 'sparse_linear.pt') and os.path.exists(
-                os.path.join(model_name, 'rng_state.pth')):
+                os.path.join(model_name, 'sparse_linear.pt')):
             logger.info('loading existing colbert_linear and sparse_linear---------')
             print('Loading exist colbert_linear, sparse_linear and rng_state--------- ')
             self.load_pooler(model_dir=model_name)
@@ -101,12 +100,10 @@ class BGEM3Model(nn.Module):
     def gradient_checkpointing_enable(self, **kwargs):
         self.model.gradient_checkpointing_enable(**kwargs)
 
-    def dense_embedding(self, hidden_state, mask, is_query = 0):
+    def dense_embedding(self, hidden_state, mask):
         if self.sentence_pooling_method == 'cls':
-            if is_query:
-                return hidden_state[:, -1]
-            else:
-                return hidden_state[:, 0]
+            return hidden_state[:, 0]
+
 
         elif self.sentence_pooling_method == 'mean':
             s = torch.sum(hidden_state * mask.unsqueeze(-1).float(), dim=1)
@@ -150,13 +147,11 @@ class BGEM3Model(nn.Module):
         scores = scores / self.temperature
         return scores
 
-    def _encode(self, features, is_query = 0):
+    def _encode(self, features):
         dense_vecs, sparse_vecs, colbert_vecs = None, None, None
         last_hidden_state = self.model(**features, return_dict=True).last_hidden_state
-        if is_query:
-           last_hidden_state = self.query_minGRU(last_hidden_state)
-        
-        dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'],is_query )
+    
+        dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
         if self.unified_finetuning:
             sparse_vecs = self.sparse_embedding(last_hidden_state, features['input_ids'])
             colbert_vecs = self.colbert_embedding(last_hidden_state, features['attention_mask'])
@@ -166,7 +161,7 @@ class BGEM3Model(nn.Module):
                 colbert_vecs = torch.nn.functional.normalize(colbert_vecs, dim=-1)
         return dense_vecs, sparse_vecs, colbert_vecs
 
-    def encode(self, features, sub_batch_size=None, is_query = 0):
+    def encode(self, features, sub_batch_size=None):
         if features is None:
             return None
 
@@ -178,7 +173,7 @@ class BGEM3Model(nn.Module):
                 for k, v in features.items():
                     sub_features[k] = v[i:end_inx]
 
-                dense_vecs, sparse_vecs, colbert_vecs = self._encode(sub_features, is_query)
+                dense_vecs, sparse_vecs, colbert_vecs = self._encode(sub_features)
                 all_dense_vecs.append(dense_vecs)
                 all_sparse_vecs.append(sparse_vecs)
                 all_colbert_vecs.append(colbert_vecs)
@@ -188,7 +183,7 @@ class BGEM3Model(nn.Module):
                 sparse_vecs = torch.cat(all_sparse_vecs, 0)
                 colbert_vecs = torch.cat(all_colbert_vecs, 0)
         else:
-            dense_vecs, sparse_vecs, colbert_vecs = self._encode(features,is_query )
+            dense_vecs, sparse_vecs, colbert_vecs = self._encode(features )
 
         if self.unified_finetuning:
             return dense_vecs.contiguous(), sparse_vecs.contiguous(), colbert_vecs.contiguous()
@@ -226,12 +221,12 @@ class BGEM3Model(nn.Module):
                 bi_directions=None):
         if self.enable_sub_batch:
             q_dense_vecs, q_sparse_vecs, q_colbert_vecs = self.encode(query,
-                                                                      sub_batch_size=self.compute_sub_batch_size(query), is_query = 1)
+                                                                      sub_batch_size=self.compute_sub_batch_size(query))
             p_dense_vecs, p_sparse_vecs, p_colbert_vecs = self.encode(passage,
                                                                       sub_batch_size=self.compute_sub_batch_size(
                                                                           passage))
         else:
-            q_dense_vecs, q_sparse_vecs, q_colbert_vecs = self.encode(query, is_query = 1)
+            q_dense_vecs, q_sparse_vecs, q_colbert_vecs = self.encode(query)
             p_dense_vecs, p_sparse_vecs, p_colbert_vecs = self.encode(passage)
 
         if self.training:
@@ -351,11 +346,11 @@ class BGEM3Model(nn.Module):
     def load_pooler(self, model_dir):
         colbert_state_dict = torch.load(os.path.join(model_dir, 'colbert_linear.pt'), map_location='cpu', weights_only=True)
         sparse_state_dict = torch.load(os.path.join(model_dir, 'sparse_linear.pt'), map_location='cpu', weights_only=True)
-        minGRU_state_dict = torch.load(os.path.join(model_dir, 'rng_state.pth'), map_location='cpu', weights_only=True)
+        # minGRU_state_dict = torch.load(os.path.join(model_dir, 'rng_state.pth'), map_location='cpu', weights_only=True)
 
         self.colbert_linear.load_state_dict(colbert_state_dict)
         self.sparse_linear.load_state_dict(sparse_state_dict)
-        self.query_minGRU = load_state_dict(minGRU_state_dict)
+        # self.query_minGRU = load_state_dict(minGRU_state_dict)
 
 
 class BGEM3ForInference(BGEM3Model):
@@ -365,18 +360,15 @@ class BGEM3ForInference(BGEM3Model):
                 return_dense: bool = True,
                 return_sparse: bool = False,
                 return_colbert: bool = False,
-                return_sparse_embedding: bool = False,
-                is_query: int = 0):
+                return_sparse_embedding: bool = False
+                ):
         assert return_dense or return_sparse or return_colbert, 'Must choose one or more from `return_colbert`, `return_sparse`, `return_dense` to set `True`!'
 
         last_hidden_state = self.model(**text_input, return_dict=True).last_hidden_state
 
-        if is_query :
-            last_hidden_state = self.query_minGRU(last_hidden_state)
-
         output = {}
         if return_dense:
-            dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'], is_query)
+            dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
             output['dense_vecs'] = dense_vecs
         if return_sparse:
             sparse_vecs = self.sparse_embedding(last_hidden_state, text_input['input_ids'],
