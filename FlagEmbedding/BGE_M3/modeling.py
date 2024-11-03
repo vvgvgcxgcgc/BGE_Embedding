@@ -88,12 +88,15 @@ class BGEM3Model(nn.Module):
         self.query_minGRU = minGRU(self.model.config.hidden_size)
 
         if os.path.exists(os.path.join(model_name, 'colbert_linear.pt')) and os.path.exists(
-                os.path.join(model_name, 'sparse_linear.pt')):
+                os.path.join(model_name, 'sparse_linear.pt') and os.path.exists(
+                os.path.join(model_name, 'rng_state.pth')):
             logger.info('loading existing colbert_linear and sparse_linear---------')
+            print('Loading exist colbert_linear, sparse_linear and rng_state--------- ')
             self.load_pooler(model_dir=model_name)
         else:
             logger.info(
                 'The parameters of colbert_linear and sparse linear is new initialize. Make sure the model is loaded for training, not inferencing')
+            print('The parameters of colbert_linear and sparse linear and minGRU is new initialize')
 
     def gradient_checkpointing_enable(self, **kwargs):
         self.model.gradient_checkpointing_enable(**kwargs)
@@ -346,10 +349,13 @@ class BGEM3Model(nn.Module):
                        os.path.join(output_dir, 'sparse_linear.pt'))
 
     def load_pooler(self, model_dir):
-        colbert_state_dict = torch.load(os.path.join(model_dir, 'colbert_linear.pt'), map_location='cpu')
-        sparse_state_dict = torch.load(os.path.join(model_dir, 'sparse_linear.pt'), map_location='cpu')
+        colbert_state_dict = torch.load(os.path.join(model_dir, 'colbert_linear.pt'), map_location='cpu', weights_only=True)
+        sparse_state_dict = torch.load(os.path.join(model_dir, 'sparse_linear.pt'), map_location='cpu', weights_only=True)
+        minGRU_state_dict = torch.load(os.path.join(model_dir, 'rng_state.pth'), map_location='cpu', weights_only=True)
+
         self.colbert_linear.load_state_dict(colbert_state_dict)
         self.sparse_linear.load_state_dict(sparse_state_dict)
+        self.query_minGRU = load_state_dict(minGRU_state_dict)
 
 
 class BGEM3ForInference(BGEM3Model):
