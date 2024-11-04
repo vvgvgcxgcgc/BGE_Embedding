@@ -290,8 +290,8 @@ class BGEM3Model(nn.Module):
                                                         q_mask=query['attention_mask'])  # B, B * N
                     colbert_loss = self.compute_loss(colbert_scores, targets)
 
-                    ensemble_loss = self.compute_loss(dense_scores + 0.3 * sparse_scores + colbert_scores, targets)
-                    loss = (loss + ensemble_loss + 0.1 * sparse_loss + colbert_loss) / 4
+                    ensemble_loss = self.compute_loss(0.6*dense_scores + 0.1 * sparse_scores + 0.4*colbert_scores, targets)
+                    loss = 0.4* loss + 0.3*ensemble_loss + 0.1 * sparse_loss + 0.2*colbert_loss
 
             if self.use_self_distill and self.step > self.self_distill_start_step and self.unified_finetuning:
                 ensemble_scores = dense_scores + 0.3 * sparse_scores + colbert_scores
