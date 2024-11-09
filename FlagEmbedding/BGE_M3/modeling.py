@@ -25,6 +25,111 @@ class EncoderOutput(ModelOutput):
     scores: Optional[Tensor] = None
 
 
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, n_heads):
+        super(MultiHeadAttention, self).__init__()
+        
+        # Kiểm tra d_model có chia hết cho n_heads không
+        assert d_model % n_heads == 0, "d_model phải chia hết cho n_heads"
+        
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads  # Kích thước mỗi đầu
+
+        # Tạo các lớp Linear để tính toán Q, K, V cho từng head
+        self.q_linear = nn.Linear(d_model, d_model)
+        self.k_linear = nn.Linear(d_model, d_model)
+        self.v_linear = nn.Linear(d_model, d_model)
+        
+        # Lớp Linear để nối tất cả các head lại với nhau
+        self.out_linear = nn.Linear(d_model, d_model)
+
+    def attention(self, Q, K, V):
+        # Tính attention scores (Q * K^T / sqrt(d_k))
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        
+        # Tính softmax cho các scores để có xác suất attention
+        attn_weights = torch.softmax(scores, dim=-1)
+        V = torch.tanh(V)
+        # Trả về giá trị weighted sum (softmax(QK^T) * V)
+        return torch.matmul(attn_weights, V), attn_weights
+
+    def forward(self, x):
+        batch_size, seq_len, _ = x.size()
+        
+        # Tính toán Q, K, V qua các lớp Linear
+        Q = self.q_linear(x)  # (batch_size, seq_len, d_model)
+        K = self.k_linear(x)  # (batch_size, seq_len, d_model)
+        V = self.v_linear(x)  # (batch_size, seq_len, d_model)
+
+        # Tách Q, K, V thành nhiều head (batch_size, n_heads, seq_len, d_k)
+        Q = Q.view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
+        K = K.view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
+        V = V.view(batch_size, seq_len, self.n_heads, self.d_k).transpose(1, 2)
+
+        # Tính toán attention cho mỗi head
+        attn_output, attn_weights = self.attention(Q, K, V)
+        
+        # Gộp lại các heads (batch_size, seq_len, d_model)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
+        
+        # Đưa qua lớp Linear cuối cùng
+        output = self.out_linear(attn_output)
+        
+        return output, attn_weights
+
+
+class TransformerLayer(nn.Module):
+    def __init__(self, d_model, n_heads, dim_feedforward, dropout=0.1):
+        super(TransformerLayer, self).__init__()
+        
+        # Multi-Head Attention
+        self.multi_head_attn = MultiheadAttention(embed_dim=d_model, num_heads=n_heads, dropout=dropout)
+        
+        # Layer Normalization
+        self.layer_norm1 = nn.LayerNorm(d_model)
+        self.layer_norm2 = nn.LayerNorm(d_model)
+        
+        # Feed Forward Network (MLP)
+        self.mlp = nn.Sequential(
+            nn.Linear(d_model, dim_feedforward),
+            nn.ReLU(),
+            nn.Linear(dim_feedforward, d_model)
+        )
+        
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # Multi-Head Self-Attention
+        attn_output, _ = self.multi_head_attn(x, x, x)
+        x = x + self.dropout(attn_output)
+        x = self.layer_norm1(x)
+        
+        # Feed Forward Network (MLP)
+        mlp_output = self.mlp(x)
+        x = x + self.dropout(mlp_output)
+        x = self.layer_norm2(x)
+        
+        return x
+
+
+
+
+
+
+# # Thử nghiệm với đầu vào ngẫu nhiên
+# d_model = 512  # Kích thước embedding
+# n_heads = 8    # Số lượng heads
+
+# custom_mha = CustomMultiHeadAttention(d_model, n_heads)
+
+# # Đầu vào là embedding đã có sẵn (batch_size, seq_len, d_model)
+# x = torch.rand(32, 50, d_model)  # Ví dụ với batch_size=32 và seq_len=50
+# output, attn_weights = custom_mha(x)
+
+# print(output.shape)       # Kích thước (32, 50, d_model)
+# print(attn_weights.shape) # Kích thước (32, n_heads, 50, 50)
 class BGEM3Model(nn.Module):
 
     def __init__(self,
@@ -86,11 +191,19 @@ class BGEM3Model(nn.Module):
         self.sparse_linear = torch.nn.Linear(in_features=self.model.config.hidden_size, out_features=1)
 
         # self.query_minGRU = minGRU(self.model.config.hidden_size)
+        self.adapter = TransformerLayer(d_model = self.model.config.hidden_size, n_heads = 8, dim_feedforward = 512, dropout = 0.1)
+        if os.path.exists(os.path.join(model_name, 'adapter.pt')):
+            adapter_state_dict = torch.load(os.path.join(model_dir, 'adapter.pt'), map_location='cpu')
+            self.adapter.load_state_dict(adapter_state_dict)
+
+
+
 
         if os.path.exists(os.path.join(model_name, 'colbert_linear.pt')) and os.path.exists(
                 os.path.join(model_name, 'sparse_linear.pt')):
             logger.info('loading existing colbert_linear and sparse_linear---------')
             print('Loading exist colbert_linear, sparse_linear and rng_state--------- ')
+
             self.load_pooler(model_dir=model_name)
         else:
             logger.info(
@@ -150,6 +263,7 @@ class BGEM3Model(nn.Module):
     def _encode(self, features):
         dense_vecs, sparse_vecs, colbert_vecs = None, None, None
         last_hidden_state = self.model(**features, return_dict=True).last_hidden_state
+        last_hidden_state = self.adapter(last_hidden_state)
     
         dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
         if self.unified_finetuning:
@@ -290,8 +404,8 @@ class BGEM3Model(nn.Module):
                                                         q_mask=query['attention_mask'])  # B, B * N
                     colbert_loss = self.compute_loss(colbert_scores, targets)
 
-                    ensemble_loss = self.compute_loss(0.6*dense_scores + 0.1 * sparse_scores + 0.4*colbert_scores, targets)
-                    loss = 0.4* loss + 0.3*ensemble_loss + 0.1 * sparse_loss + 0.2*colbert_loss
+                    ensemble_loss = self.compute_loss(dense_scores + 0.3 * sparse_scores + colbert_scores, targets)
+                    loss = (loss + ensemble_loss + 0.1 * sparse_loss + colbert_loss) / 4
 
             if self.use_self_distill and self.step > self.self_distill_start_step and self.unified_finetuning:
                 ensemble_scores = dense_scores + 0.3 * sparse_scores + colbert_scores
@@ -337,6 +451,10 @@ class BGEM3Model(nn.Module):
 
         self.model.save_pretrained(output_dir, state_dict=_trans_state_dict(self.model.state_dict()))
 
+        torch.save(_trans_state_dict(self.adapter.state_dict()),
+                    os.path.join(output_dir, 'adapter.pt'))
+
+
         if self.unified_finetuning:
             torch.save(_trans_state_dict(self.colbert_linear.state_dict()),
                        os.path.join(output_dir, 'colbert_linear.pt'))
@@ -344,8 +462,8 @@ class BGEM3Model(nn.Module):
                        os.path.join(output_dir, 'sparse_linear.pt'))
 
     def load_pooler(self, model_dir):
-        colbert_state_dict = torch.load(os.path.join(model_dir, 'colbert_linear.pt'), map_location='cpu', weights_only=True)
-        sparse_state_dict = torch.load(os.path.join(model_dir, 'sparse_linear.pt'), map_location='cpu', weights_only=True)
+        colbert_state_dict = torch.load(os.path.join(model_dir, 'colbert_linear.pt'), map_location='cpu')
+        sparse_state_dict = torch.load(os.path.join(model_dir, 'sparse_linear.pt'), map_location='cpu')
         # minGRU_state_dict = torch.load(os.path.join(model_dir, 'rng_state.pth'), map_location='cpu', weights_only=True)
 
         self.colbert_linear.load_state_dict(colbert_state_dict)
