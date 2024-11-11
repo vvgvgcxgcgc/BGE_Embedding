@@ -194,7 +194,7 @@ class BGEM3Model(nn.Module):
         self.adapter = TransformerLayer(d_model = self.model.config.hidden_size, n_heads = 8, dim_feedforward = 512, dropout = 0.1)
         if os.path.exists(os.path.join(model_name, 'adapter.pt')):
             print("loading adapter ...")
-            adapter_state_dict = torch.load(os.path.join(model_dir, 'adapter.pt'), map_location='cpu')
+            adapter_state_dict = torch.load(os.path.join(model_name, 'adapter.pt'), map_location='cpu')
             self.adapter.load_state_dict(adapter_state_dict)
 
 
