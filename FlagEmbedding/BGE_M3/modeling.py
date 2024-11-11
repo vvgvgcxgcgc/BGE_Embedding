@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Optional
 import os
-
+import math
 import torch
 import torch.distributed as dist
 from torch import nn, Tensor
@@ -84,7 +84,7 @@ class TransformerLayer(nn.Module):
         super(TransformerLayer, self).__init__()
         
         # Multi-Head Attention
-        self.multi_head_attn = MultiheadAttention(embed_dim=d_model, num_heads=n_heads, dropout=dropout)
+        self.multi_head_attn = MultiHeadAttention(d_model=d_model, n_heads=n_heads)
         
         # Layer Normalization
         self.layer_norm1 = nn.LayerNorm(d_model)
@@ -102,7 +102,7 @@ class TransformerLayer(nn.Module):
 
     def forward(self, x):
         # Multi-Head Self-Attention
-        attn_output, _ = self.multi_head_attn(x, x, x)
+        attn_output, _ = self.multi_head_attn(x)
         x = x + self.dropout(attn_output)
         x = self.layer_norm1(x)
         
@@ -263,6 +263,7 @@ class BGEM3Model(nn.Module):
     def _encode(self, features):
         dense_vecs, sparse_vecs, colbert_vecs = None, None, None
         last_hidden_state = self.model(**features, return_dict=True).last_hidden_state
+        # print(">>>>>>>>>>>>>>> ", last_hidden_state.shape)
         last_hidden_state = self.adapter(last_hidden_state)
     
         dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
@@ -503,3 +504,4 @@ class BGEM3ForInference(BGEM3Model):
                 output['colbert_vecs'] = torch.nn.functional.normalize(output['colbert_vecs'], dim=-1)
 
         return output
+
